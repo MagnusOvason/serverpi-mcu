@@ -21,20 +21,20 @@ No sensors are connected to the MCU yet, so the values are hardcoded in a json o
 #include "DHT.h"                   // Library for getting data from the DHT22 sensor
 
 // WiFi credentials
-// const char *ssid = "CG24";
-// const char *password = "KogtLort23";
+const char *ssid = "CG24";
+const char *password = "KogtLort23";
 
 // Hotspot credentials
-const char *ssid = "beefcake";
-const char *password = "skinkesalat";
+// const char *ssid = "beefcake";
+// const char *password = "skinkesalat";
 
 // MQTT broker details and credentials
-// const char *mqttServer = "192.168.2.198";
-// const int mqttPort = 1883;
+const char *mqttServer = "192.168.2.198";
+const int mqttPort = 1883;
 
 // MQTT broker details and credentials for Hotspot
-const char *mqttServer = "192.168.43.217";
-const int mqttPort = 1883;
+// const char *mqttServer = "192.168.43.217";
+// const int mqttPort = 1883;
 
 // Client user, ID and password
 const char *clientId = "mcu1";
@@ -67,7 +67,7 @@ struct Measurements
 unsigned long lastMeasureTime = 0;
 
 // Variable to define how often measurements should be taken
-unsigned long delayTime = 10000; // 60 * 1000 * 10; // = 10 minutes
+unsigned long delayTime = 60 * 1000 * 10; // = 10 minutes
 
 // Declare soil moisture sensor
 I2CSoilMoistureSensor sensor(0x21);
@@ -80,20 +80,29 @@ Measurements measurements;
 #define DHTTYPE DHT22 // DHT 22 (AM2302)
 DHT dht(DHTPIN, DHTTYPE);
 
-// Water level sensor
+// Water level sensor in form of a ultrasonic sensor (HC-SR04)
+#define ECHO_PIN 5
+#define TRIGGER_PIN 23
+
+// Light intensity sensor
+#define LIGHT_PIN 36
 
 // function prototypes
-void initWiFi();                 // Function to initialize WiFi
-void connectToMQTT();            // Function to connect to MQTT broker
-void disconnectFromMQTT();       // Function to disconnect from MQTT broker
-unsigned long getTime();         // Function to get current epoch time
-Measurements takeMeasurements(); // Function to take measurements
-void pinSetup();                 // Function to setup pins
+void initWiFi();                                                                // Function to initialize WiFi
+void connectToMQTT();                                                           // Function to connect to MQTT broker
+void disconnectFromMQTT();                                                      // Function to disconnect from MQTT broker
+unsigned long getTime();                                                        // Function to get current epoch time
+float mapLight(long x, long in_min, long in_max, float out_min, float out_max); // Function for mapping values
+float getLightIntensity();                                                      // Function to get light intensity from light sensor
+Measurements takeMeasurements();                                                // Function to take measurements
+void pinSetup();                                                                // Function to setup pins
 
 void setup()
 {
   // disable brownout detector
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+  analogReadResolution(10); // set analog read resolution to 10 bits (0-1023)
 
   // setup pins
   pinSetup();
@@ -174,7 +183,7 @@ void loop()
     JsonObject soilMoisture = metrics.createNestedObject();
     soilMoisture["name"] = "soil_moisture";
     soilMoisture["dataType"] = "float";
-    soilMoisture["value"] = (float)measurements.soilMoisture;
+    soilMoisture["value"] = measurements.soilMoisture;
     soilMoisture["unit"] = "percent";
 
     // add temperature
@@ -276,6 +285,48 @@ unsigned long getTime()
   return now;
 }
 
+// Function for mapping values
+float mapLight(long x, long in_min, long in_max, float out_min, float out_max)
+{
+  float result = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+
+  // invert result
+  result = 100.0 - result;
+
+  return result;
+}
+
+// Function for getting water level
+float getWaterLevel()
+{
+  // Trigger the sensor by setting it HIGH for 10 microseconds:
+  digitalWrite(TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGGER_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGGER_PIN, LOW);
+
+  uint16_t duration = pulseIn(ECHO_PIN, HIGH);
+  float distance = ((float)duration * 0.0343) / 2.0;
+
+  return distance;
+}
+
+// Function for getting light intensity
+float getLightIntensity()
+{
+  int lightIntensity = analogRead(LIGHT_PIN);
+
+  // convert the raw analog reading to lux
+  // https://www.maxphi.com/lux-meter-using-ldr-arduino/
+  // float lightIntensityFloat = 500.0 / (1023.0 - lightIntensity) - 1.0; //
+
+  // map light intensity to a percentage
+  float lightIntensityFloat = mapLight(lightIntensity, 0, 1023, 0.0, 100.0);
+
+  return lightIntensityFloat;
+}
+
 // Function to take measurements, save them in a struct and return the struct
 Measurements takeMeasurements()
 {
@@ -289,13 +340,13 @@ Measurements takeMeasurements()
   soilMoisture = sensor.getCapacitance(); // TODO should be uint16_t instead of float
 
   // Catnip electronics temperature sensor
-  float temperature = sensor.getTemperature();
+  uint16_t temperature = sensor.getTemperature();
   while (sensor.isBusy()) // wait until sensor is ready
   {
     delay(50);
   }
   // discard first measurement - When doing rare measurements and wanting to act instantly, do two consecutive readings to get the most up to date data.
-  temperature = sensor.getTemperature() / 10.0; // divide by 10 to get temperature in degrees celsius
+  float temperatureFloat = sensor.getTemperature() / 10.0; // divide by 10 to get temperature in degrees celsius
 
   sensor.sleep();
 
@@ -303,15 +354,15 @@ Measurements takeMeasurements()
   float humidity = dht.readHumidity();
 
   // Light intensity sensor
-  float lightIntensity = 0.5;
+  float lightIntensity = getLightIntensity();
 
   // Water level sensor
-  float waterLevel = 0.3;
+  float waterLevel = getWaterLevel();
 
   // Save measurements in a struct
   Measurements measurements;
-  measurements.soilMoisture = soilMoisture;
-  measurements.temperature = temperature;
+  measurements.soilMoisture = (float)soilMoisture;
+  measurements.temperature = temperatureFloat;
   measurements.humidity = humidity;
   measurements.lightIntensity = lightIntensity;
   measurements.waterLevel = waterLevel;
@@ -327,10 +378,15 @@ void pinSetup()
   pinMode(22, OUTPUT); // SCL
   // digitalWrite(21, HIGH); // pull-up resistor
   // digitalWrite(22, HIGH); // pull-up resistor
-  //  pull-up resistors are common for I2C, but not always necessary
 
   // Setup pins on the ESP32 Live D1 mini board for the DHT22 sensor
   pinMode(DHTPIN, OUTPUT);
 
   // Setup pins on the ESP32 Live D1 mini board for the water level sensor
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIGGER_PIN, OUTPUT);
+  digitalWrite(TRIGGER_PIN, LOW); // initialize trigger pin to low
+
+  // Setup pins on the ESP32 Live D1 mini board for the light intensity sensor
+  pinMode(LIGHT_PIN, INPUT);
 }
