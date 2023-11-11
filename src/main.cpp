@@ -37,12 +37,12 @@ const int mqttPort = 1883;
 // const int mqttPort = 1883;
 
 // Client user, ID and password
-const char *clientId = "mcu1";
-const char *clientUsername = "pub1";
-const char *clientPass = "Letspublish1";
+const char *clientId = "mcu1";           // mcu1, mcu2, mcu3
+const char *clientUsername = "pub1";     // pub1, pub2, pub3
+const char *clientPass = "Letspublish1"; // Letspublish1, Letspublish2, Letspublish3
 
 // Topic to publish to
-const char *topic = "topic-sub1";
+const char *topic = "topic-sub1"; // topic-sub1, topic-sub2, topic-sub3
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -70,7 +70,11 @@ unsigned long lastMeasureTime = 0;
 unsigned long delayTime = 60 * 1000 * 10; // = 10 minutes
 
 // Declare soil moisture sensor
-I2CSoilMoistureSensor sensor(0x21);
+I2CSoilMoistureSensor sensor(0x21); // 0x21, 0x22, 0x23
+
+// Declare pins for I2C
+#define SDA_PIN 21
+#define SCL_PIN 22
 
 // Declare variables to save measurements
 Measurements measurements;
@@ -317,10 +321,6 @@ float getLightIntensity()
 {
   int lightIntensity = analogRead(LIGHT_PIN);
 
-  // convert the raw analog reading to lux
-  // https://www.maxphi.com/lux-meter-using-ldr-arduino/
-  // float lightIntensityFloat = 500.0 / (1023.0 - lightIntensity) - 1.0; //
-
   // map light intensity to a percentage
   float lightIntensityFloat = mapLight(lightIntensity, 0, 1023, 0.0, 100.0);
 
@@ -374,10 +374,8 @@ Measurements takeMeasurements()
 void pinSetup()
 {
   // Setup pins on the ESP32 Live D1 mini board for the soil moisture sensor (I2C)
-  pinMode(21, OUTPUT); // SDA
-  pinMode(22, OUTPUT); // SCL
-  // digitalWrite(21, HIGH); // pull-up resistor
-  // digitalWrite(22, HIGH); // pull-up resistor
+  pinMode(SDA_PIN, OUTPUT); // SDA
+  pinMode(SCL_PIN, OUTPUT); // SCL
 
   // Setup pins on the ESP32 Live D1 mini board for the DHT22 sensor
   pinMode(DHTPIN, OUTPUT);
