@@ -20,38 +20,35 @@ No sensors are connected to the MCU yet, so the values are hardcoded in a json o
 #include <Wire.h>                  // I2C library
 #include "DHT.h"                   // Library for getting data from the DHT22 sensor
 
+// Macro definitions
+#define SDA_PIN 21        // SDA
+#define SCL_PIN 22        // SCL
+#define DHTVCC 16         // DHT22 sensor VCC pin
+#define DHTPIN 17         // DHT22 sensor pin
+#define DHTTYPE DHT22     // DHT22 sensor type
+#define ECHO_PIN 5        // HC-SR04 Echo Pin
+#define TRIGGER_PIN 23    // HC-SR04 Trigger Pin
+#define LIGHT_PIN 36      // Photoresistor pin
+#define LIGHTVCC 26       // Photoresistor VCC pin
+#define CATNIP_ADDR 0x23  // Catnip sensor address
+#define WATER_PUMP_PIN 19 // Motor pin
+#define DELAY_TIME 10000  // Delay time between measurements
+
 // WiFi credentials
 const char *ssid = "CG24";
 const char *password = "KogtLort23";
-
-// Hotspot credentials
-// const char *ssid = "beefcake";
-// const char *password = "skinkesalat";
 
 // MQTT broker details and credentials
 const char *mqttServer = "192.168.2.198";
 const int mqttPort = 1883;
 
-// MQTT broker details and credentials for Hotspot
-// const char *mqttServer = "192.168.43.217";
-// const int mqttPort = 1883;
-
 // Client user, ID and password
-const char *clientId = "mcu1";           // mcu1, mcu2, mcu3
-const char *clientUsername = "pub1";     // pub1, pub2, pub3
-const char *clientPass = "Letspublish1"; // Letspublish1, Letspublish2, Letspublish3
+const char *clientId = "mcu3";           // mcu1, mcu2, mcu3
+const char *clientUsername = "pub3";     // pub1, pub2, pub3
+const char *clientPass = "Letspublish3"; // Letspublish1, Letspublish2, Letspublish3
 
 // Topic to publish to
-const char *topic = "topic-sub1"; // topic-sub1, topic-sub2, topic-sub3
-
-WiFiClient espClient;
-PubSubClient client(espClient);
-
-// NTP server to request epoch time
-const char *ntpServer = "pool.ntp.org";
-
-// Variable to save current epoch time
-unsigned long epochTime;
+const char *topic = "topic-sub3"; // topic-sub1, topic-sub2, topic-sub3
 
 // Struct to save measurements
 struct Measurements
@@ -63,50 +60,33 @@ struct Measurements
   float waterLevel;
 };
 
-// Variable to save last time measurements were taken
-unsigned long lastMeasureTime = 0;
-
-// Variable to define how often measurements should be taken
-unsigned long delayTime = 60 * 1000 * 10; // = 10 minutes
-
-// Declare soil moisture sensor
-I2CSoilMoistureSensor sensor(0x21); // 0x21, 0x22, 0x23
-
-// Declare pins for I2C
-#define SDA_PIN 21
-#define SCL_PIN 22
-
-// Declare variables to save measurements
+// Declare objects
+WiFiClient espClient;                      // Initialize WiFi client
+PubSubClient client(espClient);            // Initialize MQTT client
+I2CSoilMoistureSensor sensor(CATNIP_ADDR); // Initialize I2CSoilMoistureSensor sensor (addr: 0x21, 0x22, 0x23)
+DHT dht(DHTPIN, DHTTYPE);                  // Initialize DHT sensor
 Measurements measurements;
 
-// DHT22 sensor
-#define DHTPIN 17     // Digital pin connected to the DHT sensor
-#define DHTTYPE DHT22 // DHT 22 (AM2302)
-DHT dht(DHTPIN, DHTTYPE);
-
-// Water level sensor in form of a ultrasonic sensor (HC-SR04)
-#define ECHO_PIN 5
-#define TRIGGER_PIN 23
-
-// Light intensity sensor
-#define LIGHT_PIN 36
+// Variables
+const char *ntpServer = "pool.ntp.org"; // NTP server
+unsigned long epochTime;                // Variable to save epoch time
+unsigned long lastMeasureTime = 0;      // Variable to save last measure time
+unsigned long delayTime = DELAY_TIME;   // Delay time between measurements
 
 // function prototypes
-void initWiFi();                                                                // Function to initialize WiFi
-void connectToMQTT();                                                           // Function to connect to MQTT broker
-void disconnectFromMQTT();                                                      // Function to disconnect from MQTT broker
-unsigned long getTime();                                                        // Function to get current epoch time
-float mapLight(long x, long in_min, long in_max, float out_min, float out_max); // Function for mapping values
-float getLightIntensity();                                                      // Function to get light intensity from light sensor
-Measurements takeMeasurements();                                                // Function to take measurements
-void pinSetup();                                                                // Function to setup pins
+void initWiFi();                                                        // Function to initialize WiFi
+void connectToMQTT();                                                   // Function to connect to MQTT broker
+void disconnectFromMQTT();                                              // Function to disconnect from MQTT broker
+unsigned long getTime();                                                // Function to get current epoch time
+long map(long x, long in_min, long in_max, long out_min, long out_max); // Function for mapping values
+long getLightIntensity();                                               // Function to get light intensity from light sensor
+Measurements takeMeasurements();                                        // Function to take measurements
+void pinSetup();                                                        // Function to setup pins
 
 void setup()
 {
   // disable brownout detector
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-
-  analogReadResolution(10); // set analog read resolution to 10 bits (0-1023)
 
   // setup pins
   pinSetup();
@@ -290,12 +270,9 @@ unsigned long getTime()
 }
 
 // Function for mapping values
-float mapLight(long x, long in_min, long in_max, float out_min, float out_max)
+long map(long x, long in_min, long in_max, long out_min, long out_max)
 {
   float result = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-
-  // invert result
-  result = 100.0 - result;
 
   return result;
 }
@@ -317,14 +294,21 @@ float getWaterLevel()
 }
 
 // Function for getting light intensity
-float getLightIntensity()
+long getLightIntensity()
 {
-  int lightIntensity = analogRead(LIGHT_PIN);
+  // Turn on the sensor by setting the VCC pin HIGH for 100 microseconds:
+  digitalWrite(LIGHTVCC, HIGH);
+  delayMicroseconds(100);
+
+  long lightIntensity = analogRead(LIGHT_PIN);
 
   // map light intensity to a percentage
-  float lightIntensityFloat = mapLight(lightIntensity, 0, 1023, 0.0, 100.0);
+  lightIntensity = map(lightIntensity, 0, 4095, 0.0, 100.0);
 
-  return lightIntensityFloat;
+  // Turn the sensor off by setting the VCC pin LOW:
+  digitalWrite(LIGHTVCC, LOW);
+
+  return lightIntensity;
 }
 
 // Function to take measurements, save them in a struct and return the struct
@@ -350,11 +334,14 @@ Measurements takeMeasurements()
 
   sensor.sleep();
 
-  // DHT22 humidity and temperature sensor
+  // Get humidity
+  digitalWrite(DHTVCC, HIGH);
+  delay(100); // wait for sensor to initialize
   float humidity = dht.readHumidity();
+  digitalWrite(DHTVCC, LOW);
 
   // Light intensity sensor
-  float lightIntensity = getLightIntensity();
+  long lightIntensity = getLightIntensity();
 
   // Water level sensor
   float waterLevel = getWaterLevel();
@@ -364,7 +351,7 @@ Measurements takeMeasurements()
   measurements.soilMoisture = (float)soilMoisture;
   measurements.temperature = temperatureFloat;
   measurements.humidity = humidity;
-  measurements.lightIntensity = lightIntensity;
+  measurements.lightIntensity = (float)lightIntensity;
   measurements.waterLevel = waterLevel;
 
   return measurements;
@@ -379,6 +366,8 @@ void pinSetup()
 
   // Setup pins on the ESP32 Live D1 mini board for the DHT22 sensor
   pinMode(DHTPIN, OUTPUT);
+  pinMode(DHTVCC, OUTPUT);
+  digitalWrite(DHTVCC, LOW); // initialize DHT22 sensor VCC pin to low
 
   // Setup pins on the ESP32 Live D1 mini board for the water level sensor
   pinMode(ECHO_PIN, INPUT);
@@ -387,4 +376,10 @@ void pinSetup()
 
   // Setup pins on the ESP32 Live D1 mini board for the light intensity sensor
   pinMode(LIGHT_PIN, INPUT);
+  pinMode(LIGHTVCC, OUTPUT);
+  digitalWrite(LIGHTVCC, LOW); // initialize light sensor VCC pin to low
+
+  // Setup pins on the ESP32 Live D1 mini board for the water pump
+  pinMode(WATER_PUMP_PIN, OUTPUT);
+  digitalWrite(WATER_PUMP_PIN, LOW); // initialize water pump pin to low
 }
